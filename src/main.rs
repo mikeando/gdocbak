@@ -7,7 +7,7 @@ use hyper::body::to_bytes;
 
 #[tokio::main]
 async fn main() {
-    let file = std::fs::File::open("./python_version/drmikeando/client_id.json").unwrap();
+    let file = std::fs::File::open("./client_id.json").unwrap();
     let console_app_secret: oauth2::ConsoleApplicationSecret =
         serde_json::from_reader(file).unwrap();
     let secret = console_app_secret.installed.unwrap();
