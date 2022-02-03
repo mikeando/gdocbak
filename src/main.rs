@@ -1,9 +1,43 @@
 extern crate google_drive3 as drive3;
 
-use std::io::Write;
+use std::{
+    convert::{TryFrom, TryInto},
+    io::Write,
+};
 
 use drive3::{oauth2, DriveHub};
 use hyper::body::to_bytes;
+
+struct File {
+    id: String,
+    name: String,
+    mime_type: String,
+    owned_by_me: bool,
+}
+
+#[derive(Debug)]
+enum ConversionError {
+    BadId,
+    BadName,
+    BadMimeType,
+    BadOwnedByMe,
+}
+
+impl TryFrom<&drive3::api::File> for File {
+    type Error = ConversionError;
+
+    fn try_from(value: &drive3::api::File) -> Result<Self, Self::Error> {
+        Ok(File {
+            id: value.id.clone().ok_or(ConversionError::BadId)?,
+            name: value.name.clone().ok_or(ConversionError::BadName)?,
+            mime_type: value
+                .mime_type
+                .clone()
+                .ok_or(ConversionError::BadMimeType)?,
+            owned_by_me: value.owned_by_me.ok_or(ConversionError::BadOwnedByMe)?,
+        })
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -41,36 +75,31 @@ async fn main() {
     if r.next_page_token.is_some() {
         panic!("PAGINATION NOT YET IMPLEMENTED!")
     }
-    for f in r.files.as_ref().unwrap() {
-        println!(
-            "{} '{}' {} {}",
-            f.id.as_ref().unwrap(),
-            f.name.as_ref().unwrap(),
-            f.mime_type.as_ref().unwrap(),
-            f.owned_by_me.unwrap()
-        );
+    let files: Vec<File> = r
+        .files
+        .unwrap()
+        .iter()
+        .map(|f| f.try_into().unwrap())
+        .collect();
+    for f in &files {
+        println!("{} '{}' {} {}", f.id, f.name, f.mime_type, f.owned_by_me);
     }
 
-    for f in r.files.as_ref().unwrap() {
-        if f.mime_type.as_ref().unwrap() == "application/vnd.google-apps.document"
-            && f.owned_by_me.unwrap()
-        {
+    for f in files {
+        if f.mime_type == "application/vnd.google-apps.document" && f.owned_by_me {
             let v = hub
                 .files()
-                .export(
-                    f.id.as_ref().unwrap(),
-                    "application/vnd.oasis.opendocument.text",
-                )
+                .export(&f.id, "application/vnd.oasis.opendocument.text")
                 .doit()
                 .await
                 .unwrap();
             let (_parts, body) = v.into_parts();
             let content = to_bytes(body).await.unwrap();
             let replacer = regex::Regex::new("[^[:alnum:]-_]").unwrap();
-            let out_name = replacer.replace_all(f.name.as_ref().unwrap(), "_");
+            let out_name = replacer.replace_all(&f.name, "_");
             println!(
                 "downloaded '{}' as '{}' ({} bytes)",
-                f.name.as_ref().unwrap(),
+                f.name,
                 out_name,
                 content.len()
             );
