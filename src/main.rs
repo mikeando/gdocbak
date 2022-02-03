@@ -85,14 +85,31 @@ async fn main() {
         println!("{} '{}' {} {}", f.id, f.name, f.mime_type, f.owned_by_me);
     }
 
-    for f in files {
+    'file_loop: for f in files {
         if f.mime_type == "application/vnd.google-apps.document" && f.owned_by_me {
-            let v = hub
+            let response = hub
                 .files()
                 .export(&f.id, "application/vnd.oasis.opendocument.text")
                 .doit()
-                .await
-                .unwrap();
+                .await;
+            if let Err(e) = &response {
+                if let drive3::Error::BadRequest(x) = e {
+                    for e in &x.error.errors {
+                        if e.domain == "global" && e.reason == "exportSizeLimitExceeded" {
+                            eprintln!(
+                                "WARNING: Unable to download '{}' as .odt as it is too large!",
+                                f.name
+                            );
+                            continue 'file_loop;
+                        }
+                    }
+                } else {
+                    eprintln!("Unexpected error when downloading '{}' - aborting", f.name);
+                    eprintln!("error is\n{:#?}", e);
+                }
+            }
+
+            let v = response.unwrap();
             let (_parts, body) = v.into_parts();
             let content = to_bytes(body).await.unwrap();
             let replacer = regex::Regex::new("[^[:alnum:]-_]").unwrap();
