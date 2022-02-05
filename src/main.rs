@@ -1,9 +1,28 @@
+use clap::Parser;
+
+/// Backup google documents
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    /// Location to store exported documents
+    #[clap(long)]
+    store: PathBuf,
+
+    /// Client settings
+    #[clap(long)]
+    client_settings: Option<PathBuf>,
+
+    /// Credential cache
+    #[clap(long)]
+    credentials: Option<PathBuf>,
+}
+
 extern crate google_drive3 as drive3;
 
 use std::{
     collections::BTreeMap,
     convert::{TryFrom, TryInto},
-    io::{BufReader, Write},
+    io::{BufReader, Write}, path::{Path, PathBuf},
 };
 
 use drive3::{oauth2, DriveHub};
@@ -122,9 +141,12 @@ impl TryFrom<&drive3::api::File> for File {
 
 #[tokio::main]
 async fn main() {
+
+    let args = Args::parse();
+
     // Load information about files that have already been downloaded.
     // Open the file in read-only mode with buffer.
-    let mut filemap: FileMap = match std::fs::File::open("downloads/filemap.json") {
+    let mut filemap: FileMap = match std::fs::File::open(args.store.join("filemap.json")) {
         Ok(file) => {
             let reader = BufReader::new(file);
             serde_json::from_reader(reader).unwrap()
@@ -137,7 +159,9 @@ async fn main() {
         }
     };
 
-    let file = std::fs::File::open("./client_id.json").unwrap();
+    let client_settings = args.client_settings.clone().unwrap_or(PathBuf::from("./client_id.json"));
+    let token_cache = args.credentials.clone().unwrap_or(PathBuf::from("tokencache.json"));
+    let file = std::fs::File::open(client_settings).unwrap();
     let console_app_secret: oauth2::ConsoleApplicationSecret =
         serde_json::from_reader(file).unwrap();
     let secret = console_app_secret.installed.unwrap();
@@ -146,7 +170,7 @@ async fn main() {
         secret,
         oauth2::InstalledFlowReturnMethod::Interactive,
     )
-    .persist_tokens_to_disk("tokencache.json")
+    .persist_tokens_to_disk(token_cache)
     .build()
     .await
     .unwrap();
@@ -219,12 +243,13 @@ async fn main() {
                 out_name,
                 content.len()
             );
-            let mut ff = std::fs::File::create(format!("downloads/{}.odt", out_name)).unwrap();
+            let filename = args.store.join(format!("{}.odt", out_name));
+            let mut ff = std::fs::File::create(filename).unwrap();
             ff.write_all(&content).unwrap();
             filemap.update(&f);
         }
     }
 
-    let mut filemap_file = std::fs::File::create("downloads/filemap.json").unwrap();
+    let mut filemap_file = std::fs::File::create(args.store.join("filemap.json")).unwrap();
     serde_json::to_writer_pretty(&mut filemap_file, &filemap).unwrap();
 }
