@@ -22,7 +22,8 @@ extern crate google_drive3 as drive3;
 use std::{
     collections::BTreeMap,
     convert::{TryFrom, TryInto},
-    io::{BufReader, Write}, path::{Path, PathBuf},
+    io::{BufReader, Write},
+    path::{Path, PathBuf},
 };
 
 use drive3::{oauth2, DriveHub};
@@ -40,6 +41,7 @@ struct FileMapEntry {
     name: String,
     modified_time: String,
     state: State,
+    filename: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,10 +57,11 @@ impl FileMap {
         }
     }
 
-    pub(crate) fn update(&mut self, f: &File) {
+    pub(crate) fn update(&mut self, f: &File, filename: String) {
         if let Some(e) = self.entries.get_mut(&f.id) {
             e.modified_time = f.modified_time.clone();
             e.name = f.name.clone();
+            e.filename = Some(filename);
             return;
         }
         self.entries.insert(
@@ -67,6 +70,7 @@ impl FileMap {
                 modified_time: f.modified_time.clone(),
                 name: f.name.clone(),
                 state: State::Downloaded,
+                filename: Some(filename),
             },
         );
     }
@@ -88,6 +92,7 @@ impl FileMap {
                 modified_time: f.modified_time.clone(),
                 name: f.name.clone(),
                 state: State::TooLarge,
+                filename: None,
             },
         );
     }
@@ -139,9 +144,26 @@ impl TryFrom<&drive3::api::File> for File {
     }
 }
 
+fn get_new_filename(basedir: &Path, f: &File) -> PathBuf {
+    let replacer = regex::Regex::new("[^[:alnum:]-_]").unwrap();
+    let out_name = replacer.replace_all(&f.name, "_");
+    let out_path = basedir.join(format!("{}.odt", out_name));
+    if !std::fs::metadata(&out_path).is_ok() {
+        return out_path;
+    }
+    // Find a file name with an extension that doesn't exist yet.
+    let mut i = 1;
+    loop {
+        let out_path = basedir.join(format!("{}_{}.odt", out_name, i));
+        if !std::fs::metadata(&out_path).is_ok() {
+            return out_path;
+        }
+        i += 1;
+    }
+}
+
 #[tokio::main]
 async fn main() {
-
     let args = Args::parse();
 
     // Load information about files that have already been downloaded.
@@ -159,8 +181,14 @@ async fn main() {
         }
     };
 
-    let client_settings = args.client_settings.clone().unwrap_or(PathBuf::from("./client_id.json"));
-    let token_cache = args.credentials.clone().unwrap_or(PathBuf::from("tokencache.json"));
+    let client_settings = args
+        .client_settings
+        .clone()
+        .unwrap_or(PathBuf::from("./client_id.json"));
+    let token_cache = args
+        .credentials
+        .clone()
+        .unwrap_or(PathBuf::from("tokencache.json"));
     let file = std::fs::File::open(client_settings).unwrap();
     let console_app_secret: oauth2::ConsoleApplicationSecret =
         serde_json::from_reader(file).unwrap();
@@ -209,6 +237,21 @@ async fn main() {
                 continue;
             }
 
+            let out_path = match filemap.entries.get(&f.id) {
+                None => get_new_filename(&args.store, &f),
+                Some(entry) => {
+                    if f.name == entry.name {
+                        args.store.join(entry.filename.as_ref().unwrap())
+                    } else {
+                        // The remote file name has changed.
+                        // We need to remove the old one...
+                        // TODO: We really should do this after
+                        //       we've downloaded the result data.
+                        get_new_filename(&args.store, &f)
+                    }
+                }
+            };
+
             let response = hub
                 .files()
                 .export(&f.id, "application/vnd.oasis.opendocument.text")
@@ -235,18 +278,17 @@ async fn main() {
             let v = response.unwrap();
             let (_parts, body) = v.into_parts();
             let content = to_bytes(body).await.unwrap();
-            let replacer = regex::Regex::new("[^[:alnum:]-_]").unwrap();
-            let out_name = replacer.replace_all(&f.name, "_");
+
+            let basename = out_path.file_name().unwrap().to_str().unwrap();
             println!(
                 "downloaded '{}' as '{}' ({} bytes)",
                 f.name,
-                out_name,
+                basename,
                 content.len()
             );
-            let filename = args.store.join(format!("{}.odt", out_name));
-            let mut ff = std::fs::File::create(filename).unwrap();
+            let mut ff = std::fs::File::create(&out_path).unwrap();
             ff.write_all(&content).unwrap();
-            filemap.update(&f);
+            filemap.update(&f, basename.to_string());
         }
     }
 
