@@ -203,10 +203,13 @@ async fn main() {
     .await
     .unwrap();
 
-    let hub = DriveHub::new(
-        hyper::Client::builder().build(hyper_rustls::HttpsConnector::with_native_roots()),
-        auth,
-    );
+    let https = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_native_roots()
+        .https_only()
+        .enable_http1()
+        .build();
+
+    let hub = DriveHub::new(hyper::Client::builder().build(https), auth);
     let r = hub
         .files()
         .list()
@@ -257,18 +260,6 @@ async fn main() {
                 .export(&f.id, "application/vnd.oasis.opendocument.text")
                 .doit()
                 .await;
-            if let Err(drive3::Error::BadRequest(x)) = &response {
-                for e in &x.error.errors {
-                    if e.domain == "global" && e.reason == "exportSizeLimitExceeded" {
-                        eprintln!(
-                            "WARNING: Unable to download '{}' as .odt as it is too large!",
-                            f.name
-                        );
-                        filemap.mark_as_large(f);
-                        continue 'file_loop;
-                    }
-                }
-            }
             if let Err(e) = &response {
                 eprintln!("Unexpected error when downloading '{}' - aborting", f.name);
                 eprintln!("error is\n{:#?}", e);
