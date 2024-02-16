@@ -26,7 +26,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use drive3::{oauth2, DriveHub};
+use drive3::{chrono::{DateTime, Utc}, oauth2, DriveHub};
 use hyper::body::to_bytes;
 use serde::{Deserialize, Serialize};
 
@@ -39,7 +39,7 @@ enum State {
 #[derive(Debug, Serialize, Deserialize)]
 struct FileMapEntry {
     name: String,
-    modified_time: String,
+    modified_time: DateTime<Utc>,
     state: State,
     filename: Option<String>,
 }
@@ -104,7 +104,7 @@ struct File {
     name: String,
     mime_type: String,
     owned_by_me: bool,
-    modified_time: String,
+    modified_time: DateTime<Utc>,
     trashed: bool,
 }
 
